@@ -1,0 +1,67 @@
+[build-system]
+# Hatchling 1.32 defaults to Core Metadata 2.5, which Twine 6.2 cannot
+# validate yet. Keep release artifacts on broadly supported metadata 2.4.
+requires = ["hatchling>=1.30.1,<1.32"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langgraph-artifact-memory"
+version = "0.1.0"
+description = "Externalize heavy LangGraph state as compact ArtifactRef values."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = { file = "LICENSE" }
+authors = [
+  { name = "sungreong" },
+]
+keywords = ["langgraph", "artifact", "memory", "checkpoint", "redis"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = [
+  "langchain-core>=1.4.7,<2",
+  "langgraph>=1.2,<2",
+  "langgraph-checkpoint>=4.2,<5",
+]
+
+[project.optional-dependencies]
+redis = [
+  "redis>=5,<9",
+]
+dev = [
+  "build>=1.2,<2",
+  "pytest>=8,<10",
+  "ruff>=0.9",
+  "twine>=5,<7",
+]
+
+[project.urls]
+Homepage = "https://github.com/sungreong/langgraph-artifact-memory"
+Documentation = "https://github.com/sungreong/langgraph-artifact-memory#readme"
+Repository = "https://github.com/sungreong/langgraph-artifact-memory"
+Issues = "https://github.com/sungreong/langgraph-artifact-memory/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langgraph_artifact_memory"]
+core-metadata-version = "2.4"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+markers = [
+  "integration: requires an external service",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

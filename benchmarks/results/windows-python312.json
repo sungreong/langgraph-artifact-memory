@@ -1,0 +1,39 @@
+{
+  "environment": {
+    "os": "Windows",
+    "python": "3.12.6",
+    "redis_url": "local Redis over TCP"
+  },
+  "results": [
+    {
+      "backend": "memory",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "concurrency": 20,
+      "put_seconds": 0.018131,
+      "put_operations_per_second": 55154.16,
+      "get_seconds": 0.012602,
+      "get_operations_per_second": 79355.0
+    },
+    {
+      "backend": "local",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "concurrency": 20,
+      "put_seconds": 1.117246,
+      "put_operations_per_second": 895.06,
+      "get_seconds": 0.861548,
+      "get_operations_per_second": 1160.7
+    },
+    {
+      "backend": "redis",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "concurrency": 20,
+      "put_seconds": 0.397673,
+      "put_operations_per_second": 2514.63,
+      "get_seconds": 0.308801,
+      "get_operations_per_second": 3238.33
+    }
+  ]
+}
