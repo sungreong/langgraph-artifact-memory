@@ -5,6 +5,7 @@ import os
 from uuid import uuid4
 
 import pytest
+from langchain_core.messages import HumanMessage, ToolMessage
 
 
 @pytest.mark.integration
@@ -19,10 +20,14 @@ def test_redis_store_round_trip() -> None:
         store = RedisArtifactStore(redis_url, prefix=f"lgartifact_test_{uuid4().hex}")
         scope = f"thread-{uuid4().hex}"
         try:
-            ref = await store.aput(scope, "documents", {"content": "redis-value"})
+            value = [
+                HumanMessage(content="redis-value", additional_kwargs={"keep": True}),
+                ToolMessage(content="tool-result", tool_call_id="redis-tool"),
+            ]
+            ref = await store.aput(scope, "documents", value)
             await store.aappend_archive(scope, "history", [ref])
 
-            assert await store.aget(ref) == {"content": "redis-value"}
+            assert await store.aget(ref) == value
             assert await store.alist_archive(scope, "history") == [ref]
         finally:
             await store.adelete_scope(scope)

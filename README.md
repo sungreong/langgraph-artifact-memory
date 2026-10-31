@@ -189,12 +189,17 @@ Use when multiple workers or pods need the same artifacts.
 ## Message window
 
 ```python
-from langgraph_artifact_memory import MessageWindow
+from langgraph_artifact_memory import MessageWindow, mark_message_kept
 
 memory = ArtifactMemory(
     store,
     externalize={"artifacts": Externalize(itemized=True)},
-    message_window=MessageWindow(max_messages=20),
+    message_window=MessageWindow(
+        max_messages=20,
+        keep_message_types=("system",),
+        keep_metadata_key="keep",
+        max_kept_messages=50,
+    ),
 )
 
 old_messages = await memory.aget_archive("conversation-123", limit=20)
@@ -202,6 +207,30 @@ old_messages = await memory.aget_archive("conversation-123", limit=20)
 
 A wrapped node that returns `messages` keeps the latest messages in graph state using LangGraph's
 `Overwrite` type and archives evicted messages in the configured `ArtifactStore`.
+
+Mark an individual message for bounded keep retention with ordinary LangChain message metadata:
+
+```python
+from langchain_core.messages import HumanMessage
+
+preference = HumanMessage(
+    content="Always answer me in Korean.",
+    additional_kwargs={"keep": True},
+)
+
+# Existing messages can be copied without mutation and toggled later.
+kept_preference = mark_message_kept(preference)
+ordinary_preference = mark_message_kept(kept_preference, kept=False)
+```
+
+`keep_message_types` applies the same behavior to every message of a configured type, such as
+`system`. `max_messages` counts recent non-kept messages and `max_kept_messages` separately bounds
+kept messages, so state contains at most their sum. Both lists preserve chronological order.
+Messages that exceed either bound are archived rather than deleted, including old kept messages.
+`HumanMessage`, `AIMessage`, `SystemMessage`, and `ToolMessage` use the same window and archive path.
+Kept messages remain in checkpoint state, so keep small instructions, preferences, and decisions;
+do not mark large tool payloads as kept. Store large payloads in an externalized artifact channel and
+keep only their compact reference or summary in the message.
 
 ## Metrics
 
@@ -215,7 +244,7 @@ artifact I/O. Duration metrics use running aggregates rather than retaining one 
 
 ## Compatibility
 
-| Component | Supported in 0.2.x |
+| Component | Supported in 0.3.x |
 |---|---|
 | Python | CPython 3.10-3.13 |
 | LangGraph | `>=1.2,<2` |
@@ -232,7 +261,7 @@ LangGraph 1.2 is the minimum because message-window replacement uses `langgraph.
 ```bash
 python -m build
 python -m twine check dist/*
-python -m pip install --force-reinstall dist/langgraph_artifact_memory-0.2.0-py3-none-any.whl
+python -m pip install --force-reinstall dist/langgraph_artifact_memory-0.3.0-py3-none-any.whl
 python -c "from langgraph_artifact_memory import ArtifactMemory, InMemoryArtifactStore"
 ```
 

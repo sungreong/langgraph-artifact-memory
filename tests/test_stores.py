@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from langgraph_artifact_memory import InMemoryArtifactStore, LocalArtifactStore
 
@@ -55,5 +56,30 @@ def test_local_store_rejects_reference_outside_root(tmp_path: Path) -> None:
 
         with pytest.raises(ValueError, match="escapes"):
             await store.aget({"artifact_key": "local:../outside.blob", "size_bytes": 1})
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", ["memory", "local"])
+def test_store_round_trips_diverse_kept_messages(
+    tmp_path: Path,
+    backend: str,
+) -> None:
+    async def scenario() -> None:
+        store = (
+            InMemoryArtifactStore()
+            if backend == "memory"
+            else LocalArtifactStore(tmp_path / "message-artifacts")
+        )
+        messages = [
+            SystemMessage(content="rules"),
+            HumanMessage(content="preference", additional_kwargs={"keep": True}),
+            AIMessage(content="answer"),
+            ToolMessage(content="result", tool_call_id="tool-call"),
+        ]
+
+        ref = await store.aput("thread-1", "messages", messages)
+
+        assert await store.aget(ref) == messages
 
     asyncio.run(scenario())

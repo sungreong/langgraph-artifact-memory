@@ -13,6 +13,7 @@ from langgraph_artifact_memory.models import (
     Hydrate,
     MessageWindow,
     is_artifact_ref,
+    mark_message_kept,
 )
 from langgraph_artifact_memory.resilience import ArtifactIOPolicy
 from langgraph_artifact_memory.stores import (
@@ -38,6 +39,7 @@ __all__ = [
     "LocalArtifactStore",
     "MessageWindow",
     "is_artifact_ref",
+    "mark_message_kept",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

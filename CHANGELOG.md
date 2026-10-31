@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Add bounded keep retention for messages marked with `additional_kwargs={"keep": True}`.
+- Add message-type keep rules, such as retaining system messages.
+- Add `mark_message_kept()` for immutable keep/unkeep metadata updates.
+- Add a separate `max_kept_messages` bound so pinned content cannot grow state without limit.
+- Preserve chronological order across kept and recent messages.
+- Archive keep overflow and support Human, AI, System, and Tool messages through one policy.
+
 ## 0.2.0
 
 - Add bounded, order-preserving concurrent artifact put/get operations.

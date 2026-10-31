@@ -1,6 +1,6 @@
 # Roadmap
 
-## Planned after the 0.2 resilience release
+## Planned after the 0.3 message retention release
 
 - `S3ArtifactStore` compatible with AWS S3 and S3-compatible services such as MinIO.
   - Multipart upload for large values.

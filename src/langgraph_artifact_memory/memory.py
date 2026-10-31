@@ -144,8 +144,7 @@ class ArtifactMemory:
             return
         current = list(state.get(policy.key, []))
         combined = list(add_messages(current, updates[policy.key]))
-        evicted = combined[: -policy.max_messages]
-        retained = combined[-policy.max_messages :]
+        retained, evicted = policy.select(combined)
         if evicted:
             refs = await self._io.map(
                 evicted,

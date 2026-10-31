@@ -5,16 +5,20 @@ import importlib.util
 import tempfile
 from pathlib import Path
 
+from langchain_core.messages import HumanMessage
+
 from langgraph_artifact_memory import (
     ArtifactIOPolicy,
     InMemoryArtifactStore,
     LocalArtifactStore,
+    mark_message_kept,
 )
 
 
 async def main() -> None:
     assert importlib.util.find_spec("redis") is None
     assert ArtifactIOPolicy().max_concurrency == 16
+    assert mark_message_kept(HumanMessage(content="keep")).additional_kwargs["keep"]
 
     memory_store = InMemoryArtifactStore()
     memory_ref = await memory_store.aput("smoke", "documents", {"value": [1, 2, 3]})
