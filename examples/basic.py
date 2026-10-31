@@ -49,8 +49,11 @@ async def main() -> None:
         {"artifacts": [{"content": "A" * 4096}, {"content": "B" * 4096}]},
         {"configurable": {"thread_id": "example-thread"}},
     )
+    assert result["answer"] == "hydrated 2 artifacts"
+    assert all("artifact_key" in ref for ref in result["artifacts"])
     print(result["answer"])
     print(result["artifacts"])
+    print("basic example passed")
 
 
 if __name__ == "__main__":

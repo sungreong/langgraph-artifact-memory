@@ -108,6 +108,49 @@ result = await memory.ainvoke(
 Use `memory.ainvoke()`, not `graph.ainvoke()`, for inputs containing configured externalized
 channels. This ensures heavy input is replaced before LangGraph writes its first checkpoint.
 
+## Runnable examples
+
+Every example contains assertions and is executed by the test suite as a standalone script.
+
+| Example | Demonstrates |
+|---|---|
+| `examples/basic.py` | Basic graph input externalization and bounded hydration |
+| `examples/document_pipeline.py` | Collect, externalize, analyze, and answer pipeline |
+| `examples/parallel_tool_workflow.py` | Parallel `Send` workers with externalized Tool results |
+| `examples/conditional_hydration.py` | Quick and deep graph routes with different hydrate limits |
+| `examples/multi_thread_isolation.py` | Separate checkpoints and archives for multiple thread IDs |
+| `examples/multiple_channels.py` | Different policies for document and tool-result state keys |
+| `examples/message_keep.py` | Human, AI, System, and Tool messages with keep and archive |
+| `examples/long_conversation.py` | A 100-turn conversation bounded to recent and kept messages |
+| `examples/local_persistence.py` | Reopening a Local store after a simulated process restart |
+| `examples/resilient_io.py` | Transient failures, retries, and resilience metrics |
+| `examples/redis_shared.py` | Two workers sharing artifacts through Redis |
+
+Run the examples from the repository root:
+
+```bash
+python examples/basic.py
+python examples/document_pipeline.py
+python examples/parallel_tool_workflow.py
+python examples/conditional_hydration.py
+python examples/multi_thread_isolation.py
+python examples/message_keep.py
+python examples/long_conversation.py
+python examples/local_persistence.py
+python examples/multiple_channels.py
+python examples/resilient_io.py
+```
+
+The Redis example requires the optional dependency and a URL:
+
+```bash
+pip install -e ".[redis]"
+REDIS_URL=redis://localhost:6379/0 python examples/redis_shared.py
+```
+
+In PowerShell, set the environment variable with
+`$env:REDIS_URL = "redis://localhost:6379/0"` before running the same Python command.
+
 ## Bounded async I/O and resilience
 
 Artifact lists are stored and hydrated concurrently while preserving their original order. A

@@ -8,6 +8,8 @@
 - Add a separate `max_kept_messages` bound so pinned content cannot grow state without limit.
 - Preserve chronological order across kept and recent messages.
 - Archive keep overflow and support Human, AI, System, and Tool messages through one policy.
+- Add standalone, assertion-backed examples for pipelines, parallel Tools, conditional hydration,
+  thread isolation, retention, persistence, resilience, and Redis.
 
 ## 0.2.0
 
