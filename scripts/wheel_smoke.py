@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import operator
 import tempfile
 from pathlib import Path
+from typing import Annotated, Any
 
 from langchain_core.messages import HumanMessage
+from typing_extensions import TypedDict
 
 from langgraph_artifact_memory import (
     ArtifactIOPolicy,
+    ArtifactMemory,
+    ArtifactRef,
+    Externalize,
     InMemoryArtifactStore,
     LocalArtifactStore,
     mark_message_kept,
 )
+
+
+class State(TypedDict, total=False):
+    documents: Annotated[list[dict[str, Any] | ArtifactRef], operator.add]
 
 
 async def main() -> None:
@@ -21,6 +31,11 @@ async def main() -> None:
     assert mark_message_kept(HumanMessage(content="keep")).additional_kwargs["keep"]
 
     memory_store = InMemoryArtifactStore()
+    ArtifactMemory(
+        memory_store,
+        externalize={"documents": Externalize()},
+        state_schema=State,
+    )
     memory_ref = await memory_store.aput("smoke", "documents", {"value": [1, 2, 3]})
     assert await memory_store.aget(memory_ref) == {"value": [1, 2, 3]}
 

@@ -26,6 +26,7 @@ async def main() -> None:
     memory = ArtifactMemory(
         InMemoryArtifactStore(),
         externalize={"documents": Externalize(itemized=True)},
+        state_schema=State,
     )
 
     def route(state: State) -> Literal["quick", "deep"]:

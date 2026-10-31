@@ -19,6 +19,7 @@ from langgraph_artifact_memory.models import (
 )
 from langgraph_artifact_memory.resilience import ArtifactIOExecutor, ArtifactIOPolicy
 from langgraph_artifact_memory.stores.base import ArtifactStore
+from langgraph_artifact_memory.validation import StateSchemaValidator, ValidationMode
 
 NodeResult = Mapping[str, Any]
 Node = Callable[..., NodeResult | Awaitable[NodeResult]]
@@ -35,11 +36,17 @@ class ArtifactMemory:
         externalize: Mapping[str, Externalize],
         message_window: MessageWindow | None = None,
         io_policy: ArtifactIOPolicy | None = None,
+        state_schema: type[Any] | None = None,
+        validation: ValidationMode = "strict",
     ) -> None:
         self.store = store
         self.externalize = dict(externalize)
         self.message_window = message_window
         self.io_policy = io_policy or ArtifactIOPolicy()
+        self.state_schema = state_schema
+        self.validation = validation
+        self._validator = StateSchemaValidator(state_schema, validation)
+        self._validator.validate_configuration(self.externalize, self.message_window)
         self.metrics = ArtifactMemoryMetrics()
         self._io = ArtifactIOExecutor(self.io_policy, self.metrics)
 
@@ -73,6 +80,7 @@ class ArtifactMemory:
     async def _externalize_value(
         self, scope: str, channel: str, value: Any, policy: Externalize
     ) -> Any:
+        self._validator.validate_externalized_value(channel, value, policy)
         if policy.itemized and isinstance(value, list):
 
             async def externalize_item(item: Any) -> Any:
@@ -125,16 +133,23 @@ class ArtifactMemory:
         hydrated = await self._io.map(values, hydrate_item)
         return hydrated if isinstance(value, list) else hydrated[0]
 
-    async def hydrate_state(
+    async def _hydrate_state(
         self, state: Mapping[str, Any], hydrate: Mapping[str, Hydrate]
     ) -> dict[str, Any]:
-        """Return a node-local state copy with selected references resolved."""
-
         result = dict(state)
         for channel, spec in hydrate.items():
             if channel in result:
                 result[channel] = await self._hydrate_value(result[channel], spec)
         return result
+
+    async def hydrate_state(
+        self, state: Mapping[str, Any], hydrate: Mapping[str, Hydrate]
+    ) -> dict[str, Any]:
+        """Return a node-local state copy with selected references resolved."""
+
+        hydrate = dict(hydrate)
+        self._validator.validate_hydrate(hydrate)
+        return await self._hydrate_state(state, hydrate)
 
     async def _apply_message_window(
         self, scope: str, state: Mapping[str, Any], updates: dict[str, Any]
@@ -168,11 +183,12 @@ class ArtifactMemory:
         """Wrap a state-only or state-plus-config node with artifact hydration."""
 
         hydrate = dict(hydrate or {})
+        self._validator.validate_hydrate(hydrate)
         parameter_count = len(inspect.signature(node).parameters)
 
         async def wrapped(state: Mapping[str, Any], config: RunnableConfig) -> dict[str, Any]:
             scope = self._thread_id(config)
-            hydrated = await self.hydrate_state(state, hydrate)
+            hydrated = await self._hydrate_state(state, hydrate)
             value = node(hydrated, config) if parameter_count >= 2 else node(hydrated)
             result = await value if inspect.isawaitable(value) else value
             updates = dict(cast(NodeResult, result))

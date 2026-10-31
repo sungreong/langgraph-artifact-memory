@@ -74,6 +74,7 @@ memory = ArtifactMemory(
     InMemoryArtifactStore(),
     externalize={"artifacts": Externalize(itemized=True)},
     io_policy=ArtifactIOPolicy(max_concurrency=16),
+    state_schema=State,
 )
 
 
@@ -108,6 +109,38 @@ result = await memory.ainvoke(
 Use `memory.ainvoke()`, not `graph.ainvoke()`, for inputs containing configured externalized
 channels. This ensures heavy input is replaced before LangGraph writes its first checkpoint.
 
+## State schema validation
+
+Pass the same schema used by `StateGraph` to detect configuration mistakes before the graph starts:
+
+```python
+memory = ArtifactMemory(
+    store,
+    externalize={"artifacts": Externalize(itemized=True)},
+    state_schema=State,
+    validation="strict",
+)
+```
+
+Strict validation checks that:
+
+- every `externalize`, `hydrate`, and `message_window` key exists in the state schema;
+- `Externalize(itemized=True)` targets a `list[...]` channel whose item type can hold
+  `ArtifactRef`;
+- `Externalize(itemized=False)` targets a channel whose type can hold `ArtifactRef`;
+- a message window targets a list channel;
+- input values and wrapped node updates for itemized channels are actually lists at runtime.
+
+A typo such as `"artfacts"` raises `ArtifactConfigurationError` with
+`Did you mean 'artifacts'?`. A node returning the wrong runtime shape raises
+`ArtifactStateTypeError` before the value is written to the artifact store or checkpoint.
+
+The mode can be changed to `validation="warn"` during migration, which emits
+`ArtifactValidationWarning` and preserves the previous behavior, or to `validation="off"` to skip
+validation. Static key and annotation checks require `state_schema`; runtime itemized-value checks
+still apply in strict mode without one. `TypedDict` annotations describe valid state but do not
+perform runtime validation by themselves, which is why the package performs both checks.
+
 ## Runnable examples
 
 Every example contains assertions and is executed by the test suite as a standalone script.
@@ -125,6 +158,7 @@ Every example contains assertions and is executed by the test suite as a standal
 | `examples/local_persistence.py` | Reopening a Local store after a simulated process restart |
 | `examples/resilient_io.py` | Transient failures, retries, and resilience metrics |
 | `examples/redis_shared.py` | Two workers sharing artifacts through Redis |
+| `examples/state_validation.py` | Schema typos and invalid node/input shapes caught early |
 
 Run the examples from the repository root:
 
@@ -139,6 +173,7 @@ python examples/long_conversation.py
 python examples/local_persistence.py
 python examples/multiple_channels.py
 python examples/resilient_io.py
+python examples/state_validation.py
 ```
 
 The Redis example requires the optional dependency and a URL:
@@ -287,7 +322,7 @@ artifact I/O. Duration metrics use running aggregates rather than retaining one 
 
 ## Compatibility
 
-| Component | Supported in 0.3.x |
+| Component | Supported in 0.4.x |
 |---|---|
 | Python | CPython 3.10-3.13 |
 | LangGraph | `>=1.2,<2` |
@@ -304,7 +339,7 @@ LangGraph 1.2 is the minimum because message-window replacement uses `langgraph.
 ```bash
 python -m build
 python -m twine check dist/*
-python -m pip install --force-reinstall dist/langgraph_artifact_memory-0.3.0-py3-none-any.whl
+python -m pip install --force-reinstall dist/langgraph_artifact_memory-0.4.0-py3-none-any.whl
 python -c "from langgraph_artifact_memory import ArtifactMemory, InMemoryArtifactStore"
 ```
 

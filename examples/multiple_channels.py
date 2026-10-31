@@ -30,6 +30,7 @@ async def main() -> None:
             "documents": Externalize(itemized=True),
             "tool_results": Externalize(itemized=True),
         },
+        state_schema=State,
     )
 
     def analyze(state: State) -> dict[str, str]:

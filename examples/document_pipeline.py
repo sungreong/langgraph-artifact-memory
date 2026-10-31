@@ -28,6 +28,7 @@ async def main() -> None:
     memory = ArtifactMemory(
         InMemoryArtifactStore(),
         externalize={"documents": Externalize(itemized=True)},
+        state_schema=State,
     )
 
     def collect(state: State) -> dict[str, Any]:

@@ -22,6 +22,7 @@ async def main() -> None:
         InMemoryArtifactStore(),
         externalize={},
         message_window=policy,
+        state_schema=State,
     )
     answer_count = 0
 

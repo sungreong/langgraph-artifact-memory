@@ -37,6 +37,7 @@ async def main() -> None:
             keep_message_types=("system",),
             max_kept_messages=2,
         ),
+        state_schema=State,
     )
     answer_count = 0
 

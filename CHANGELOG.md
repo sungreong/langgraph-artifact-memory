@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Add optional `state_schema` inspection for externalized, hydrated, and message-window channels.
+- Add typo suggestions for unknown state keys.
+- Validate `itemized=True` list shape and `ArtifactRef`-compatible annotations.
+- Reject invalid input and wrapped-node update shapes before artifact or checkpoint writes.
+- Add strict, warning-only, and disabled validation modes.
+- Add typed configuration, runtime state, and validation warning APIs.
+- Add a standalone state-validation example and regression tests.
+
 ## 0.3.0
 
 - Add bounded keep retention for messages marked with `additional_kwargs={"keep": True}`.

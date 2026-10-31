@@ -21,6 +21,7 @@ async def main() -> None:
         InMemoryArtifactStore(),
         externalize={},
         message_window=MessageWindow(max_messages=2, max_kept_messages=1),
+        state_schema=State,
     )
 
     def answer(state: State) -> dict[str, Any]:

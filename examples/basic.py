@@ -28,6 +28,7 @@ async def main() -> None:
         InMemoryArtifactStore(),
         externalize={"artifacts": Externalize(itemized=True)},
         io_policy=ArtifactIOPolicy(max_concurrency=8),
+        state_schema=State,
     )
 
     def answer(state: State) -> dict[str, str]:

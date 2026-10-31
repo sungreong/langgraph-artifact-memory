@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
         "multiple_channels.py",
         "parallel_tool_workflow.py",
         "resilient_io.py",
+        "state_validation.py",
     ],
 )
 def test_example_runs_as_a_standalone_script(example: str) -> None:

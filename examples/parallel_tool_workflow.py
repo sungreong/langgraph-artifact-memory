@@ -29,6 +29,7 @@ async def main() -> None:
     memory = ArtifactMemory(
         InMemoryArtifactStore(),
         externalize={"tool_results": Externalize(itemized=True)},
+        state_schema=State,
     )
 
     def fan_out(state: State) -> list[Send]:
