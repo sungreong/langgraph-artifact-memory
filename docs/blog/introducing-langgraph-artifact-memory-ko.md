@@ -8,9 +8,14 @@ tags:
   - Redis
   - Python
   - AI Agent
-coverImage: "./images/langgraph-artifact-memory-hero-v2.png"
+coverImage: "./images/langgraph-artifact-memory-thumbnail-ko.webp"
 theme: paper
 intent: narrative
+styleProfile: editorial-blog
+appearance: reader
+appearanceBackground: linen
+appearanceFont: noto-kr
+appearanceRadius: soft
 toc: true
 tocDepth: 3
 tocStyle: flat
