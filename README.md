@@ -56,6 +56,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from langgraph_artifact_memory import (
+    ArtifactIOPolicy,
     ArtifactMemory,
     ArtifactRef,
     Externalize,
@@ -72,6 +73,7 @@ class State(TypedDict, total=False):
 memory = ArtifactMemory(
     InMemoryArtifactStore(),
     externalize={"artifacts": Externalize(itemized=True)},
+    io_policy=ArtifactIOPolicy(max_concurrency=16),
 )
 
 
@@ -105,6 +107,45 @@ result = await memory.ainvoke(
 
 Use `memory.ainvoke()`, not `graph.ainvoke()`, for inputs containing configured externalized
 channels. This ensures heavy input is replaced before LangGraph writes its first checkpoint.
+
+## Bounded async I/O and resilience
+
+Artifact lists are stored and hydrated concurrently while preserving their original order. A
+shared semaphore bounds all store I/O performed by one `ArtifactMemory` instance, including calls
+from concurrent graph threads.
+
+```python
+from langgraph_artifact_memory import ArtifactIOPolicy, ArtifactMemory
+
+memory = ArtifactMemory(
+    store,
+    externalize={"artifacts": Externalize(itemized=True)},
+    io_policy=ArtifactIOPolicy(
+        max_concurrency=16,
+        get_timeout=2.0,
+        put_timeout=5.0,
+        archive_timeout=3.0,
+        acquire_timeout=1.0,
+        max_retries=2,
+        initial_backoff=0.1,
+        max_backoff=2.0,
+        jitter=0.1,
+    ),
+)
+```
+
+- Timeouts and transient connection failures use bounded exponential-backoff retries.
+- Missing artifacts and serialization or validation errors are not retried.
+- `put`, `get`, and archive reads are safe to retry with the shipped content-addressed stores.
+- Archive append is timed out but is not automatically retried because an ambiguous write could
+  otherwise duplicate archive entries.
+- `acquire_timeout=None` waits for I/O capacity. Set a positive value to reject excess work with
+  `ArtifactCapacityError` instead of allowing an unbounded wait.
+
+Terminal timeouts raise `ArtifactTimeoutError`; exhausted transient failures raise
+`ArtifactUnavailableError`. These errors are allowed to leave the node so LangGraph can apply its
+node-level retry or failure policy. If a wrapped node also has a LangGraph `RetryPolicy`, keep both
+attempt limits small: store-level attempts and node-level attempts multiply.
 
 ## Choose a store
 
@@ -169,10 +210,12 @@ print(memory.metrics.snapshot())
 ```
 
 The snapshot contains put/get/archive counts, logical bytes, and in-process operation durations.
+It also reports retries, failures, timeouts, capacity rejections, queue wait, and peak in-flight
+artifact I/O. Duration metrics use running aggregates rather than retaining one sample per call.
 
 ## Compatibility
 
-| Component | Supported in 0.1.x |
+| Component | Supported in 0.2.x |
 |---|---|
 | Python | CPython 3.10-3.13 |
 | LangGraph | `>=1.2,<2` |
@@ -189,7 +232,7 @@ LangGraph 1.2 is the minimum because message-window replacement uses `langgraph.
 ```bash
 python -m build
 python -m twine check dist/*
-python -m pip install --force-reinstall dist/langgraph_artifact_memory-0.1.0-py3-none-any.whl
+python -m pip install --force-reinstall dist/langgraph_artifact_memory-0.2.0-py3-none-any.whl
 python -c "from langgraph_artifact_memory import ArtifactMemory, InMemoryArtifactStore"
 ```
 
@@ -211,6 +254,20 @@ python benchmarks/backend_benchmark.py \
 
 Backend microbenchmarks measure serialization and storage operations. The checkpoint reduction shown
 above comes from an end-to-end LangGraph benchmark, not only raw store throughput.
+
+Compare the bounded I/O policy at several concurrency levels:
+
+```bash
+python benchmarks/io_policy_benchmark.py \
+  --operations 1000 \
+  --concurrency 1,4,16 \
+  --redis-url redis://localhost:6379/0
+```
+
+On one Windows/Python 3.12 run with 1,000 4 KB values, Redis concurrency 4 increased put
+throughput from 658 to 3,529 operations/second, while concurrency 16 increased get throughput from
+756 to 3,828 operations/second. Treat these as local measurements rather than production capacity
+guarantees; tune concurrency against the real Redis connection pool and latency distribution.
 
 ## Lifecycle
 

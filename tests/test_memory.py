@@ -79,7 +79,7 @@ def test_artifact_memory_externalizes_hydrates_and_archives_messages() -> None:
         assert len(archived) == 6
         assert memory.metrics.snapshot()["counts"] == {
             "put": 11,
-            "get": 9,
+            "get": 15,
             "archive": 6,
         }
 

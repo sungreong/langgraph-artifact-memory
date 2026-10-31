@@ -17,6 +17,7 @@ from langgraph_artifact_memory.models import (
     MessageWindow,
     is_artifact_ref,
 )
+from langgraph_artifact_memory.resilience import ArtifactIOExecutor, ArtifactIOPolicy
 from langgraph_artifact_memory.stores.base import ArtifactStore
 
 NodeResult = Mapping[str, Any]
@@ -33,11 +34,14 @@ class ArtifactMemory:
         *,
         externalize: Mapping[str, Externalize],
         message_window: MessageWindow | None = None,
+        io_policy: ArtifactIOPolicy | None = None,
     ) -> None:
         self.store = store
         self.externalize = dict(externalize)
         self.message_window = message_window
+        self.io_policy = io_policy or ArtifactIOPolicy()
         self.metrics = ArtifactMemoryMetrics()
+        self._io = ArtifactIOExecutor(self.io_policy, self.metrics)
 
     @staticmethod
     def _thread_id(config: RunnableConfig) -> str:
@@ -48,21 +52,35 @@ class ArtifactMemory:
 
     async def _put(self, scope: str, channel: str, value: Any) -> ArtifactRef:
         started = perf_counter()
-        ref = await self.store.aput(scope, channel, value)
+        ref = await self._io.run(
+            "put",
+            lambda: self.store.aput(scope, channel, value),
+            timeout=self.io_policy.put_timeout,
+        )
         self.metrics.record("put", started, size_bytes=ref["size_bytes"])
         return ref
+
+    async def _get(self, ref: ArtifactRef) -> Any:
+        started = perf_counter()
+        value = await self._io.run(
+            "get",
+            lambda: self.store.aget(ref),
+            timeout=self.io_policy.get_timeout,
+        )
+        self.metrics.record("get", started, size_bytes=ref["size_bytes"])
+        return value
 
     async def _externalize_value(
         self, scope: str, channel: str, value: Any, policy: Externalize
     ) -> Any:
         if policy.itemized and isinstance(value, list):
-            result: list[Any] = []
-            for item in value:
+
+            async def externalize_item(item: Any) -> Any:
                 if is_artifact_ref(item):
-                    result.append(item)
-                else:
-                    result.append(await self._put(scope, channel, item))
-            return result
+                    return item
+                return await self._put(scope, channel, item)
+
+            return await self._io.map(value, externalize_item)
         if is_artifact_ref(value):
             return value
         return await self._put(scope, channel, value)
@@ -98,14 +116,13 @@ class ArtifactMemory:
 
     async def _hydrate_value(self, value: Any, spec: Hydrate) -> Any:
         values = self._select(value, spec) if isinstance(value, list) else [value]
-        hydrated: list[Any] = []
-        for item in values:
+
+        async def hydrate_item(item: Any) -> Any:
             if not is_artifact_ref(item):
-                hydrated.append(item)
-                continue
-            started = perf_counter()
-            hydrated.append(await self.store.aget(item))
-            self.metrics.record("get", started, size_bytes=item["size_bytes"])
+                return item
+            return await self._get(item)
+
+        hydrated = await self._io.map(values, hydrate_item)
         return hydrated if isinstance(value, list) else hydrated[0]
 
     async def hydrate_state(
@@ -130,8 +147,16 @@ class ArtifactMemory:
         evicted = combined[: -policy.max_messages]
         retained = combined[-policy.max_messages :]
         if evicted:
-            refs = [await self._put(scope, policy.archive_channel, message) for message in evicted]
-            await self.store.aappend_archive(scope, policy.archive_channel, refs)
+            refs = await self._io.map(
+                evicted,
+                lambda message: self._put(scope, policy.archive_channel, message),
+            )
+            await self._io.run(
+                "archive_append",
+                lambda: self.store.aappend_archive(scope, policy.archive_channel, refs),
+                timeout=self.io_policy.archive_timeout,
+                retry=False,
+            )
             self.metrics.counts["archive"] += len(refs)
         updates[policy.key] = Overwrite(retained)
 
@@ -175,14 +200,18 @@ class ArtifactMemory:
         return await graph.ainvoke(prepared, config, **kwargs)
 
     async def aget(self, ref: ArtifactRef) -> Any:
-        return await self.store.aget(ref)
+        return await self._get(ref)
 
     async def aget_archive(self, thread_id: str, *, limit: int | None = None) -> list[Any]:
         if self.message_window is None:
             return []
-        refs = await self.store.alist_archive(
-            thread_id,
-            self.message_window.archive_channel,
-            limit=limit,
+        refs = await self._io.run(
+            "archive_list",
+            lambda: self.store.alist_archive(
+                thread_id,
+                self.message_window.archive_channel,
+                limit=limit,
+            ),
+            timeout=self.io_policy.archive_timeout,
         )
-        return [await self.store.aget(ref) for ref in refs]
+        return await self._io.map(refs, self._get)

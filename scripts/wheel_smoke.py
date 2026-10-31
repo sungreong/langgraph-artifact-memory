@@ -5,11 +5,16 @@ import importlib.util
 import tempfile
 from pathlib import Path
 
-from langgraph_artifact_memory import InMemoryArtifactStore, LocalArtifactStore
+from langgraph_artifact_memory import (
+    ArtifactIOPolicy,
+    InMemoryArtifactStore,
+    LocalArtifactStore,
+)
 
 
 async def main() -> None:
     assert importlib.util.find_spec("redis") is None
+    assert ArtifactIOPolicy().max_concurrency == 16
 
     memory_store = InMemoryArtifactStore()
     memory_ref = await memory_store.aput("smoke", "documents", {"value": [1, 2, 3]})

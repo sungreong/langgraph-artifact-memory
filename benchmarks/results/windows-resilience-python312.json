@@ -1,0 +1,75 @@
+{
+  "environment": {
+    "os": "Windows",
+    "python": "3.12.6",
+    "redis_url": "local Redis over TCP"
+  },
+  "results": [
+    {
+      "backend": "local",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "max_concurrency": 1,
+      "put_seconds": 4.408052,
+      "put_operations_per_second": 226.86,
+      "get_seconds": 9.537721,
+      "get_operations_per_second": 104.85,
+      "observed_max_in_flight": 1
+    },
+    {
+      "backend": "local",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "max_concurrency": 4,
+      "put_seconds": 1.662706,
+      "put_operations_per_second": 601.43,
+      "get_seconds": 1.335846,
+      "get_operations_per_second": 748.59,
+      "observed_max_in_flight": 4
+    },
+    {
+      "backend": "local",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "max_concurrency": 16,
+      "put_seconds": 1.24776,
+      "put_operations_per_second": 801.44,
+      "get_seconds": 0.960189,
+      "get_operations_per_second": 1041.46,
+      "observed_max_in_flight": 16
+    },
+    {
+      "backend": "redis",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "max_concurrency": 1,
+      "put_seconds": 1.520409,
+      "put_operations_per_second": 657.72,
+      "get_seconds": 1.323501,
+      "get_operations_per_second": 755.57,
+      "observed_max_in_flight": 1
+    },
+    {
+      "backend": "redis",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "max_concurrency": 4,
+      "put_seconds": 0.283402,
+      "put_operations_per_second": 3528.56,
+      "get_seconds": 0.322105,
+      "get_operations_per_second": 3104.58,
+      "observed_max_in_flight": 4
+    },
+    {
+      "backend": "redis",
+      "operations": 1000,
+      "payload_bytes": 4096,
+      "max_concurrency": 16,
+      "put_seconds": 0.293109,
+      "put_operations_per_second": 3411.7,
+      "get_seconds": 0.26121,
+      "get_operations_per_second": 3828.34,
+      "observed_max_in_flight": 16
+    }
+  ]
+}

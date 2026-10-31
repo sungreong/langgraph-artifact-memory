@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from langgraph_artifact_memory import (
+    ArtifactIOPolicy,
     ArtifactMemory,
     ArtifactRef,
     Externalize,
@@ -26,6 +27,7 @@ async def main() -> None:
     memory = ArtifactMemory(
         InMemoryArtifactStore(),
         externalize={"artifacts": Externalize(itemized=True)},
+        io_policy=ArtifactIOPolicy(max_concurrency=8),
     )
 
     def answer(state: State) -> dict[str, str]:
