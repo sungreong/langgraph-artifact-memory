@@ -39,11 +39,12 @@ state에 계속 유지하면 체크포인트가 무거워진다. 이 두 선택�
 이 글에서는 다음 내용을 다룬다.
 
 1. 왜 이 문제를 별도 라이브러리로 풀려고 했는가
-2. `ArtifactRef`와 선택적 hydrate가 어떤 역할을 하는가
-3. 메시지, 파일, Tool 결과를 어떻게 관리하는가
-4. 10명의 동시 사용자와 1,000턴을 어떻게 성능 테스트했는가
-5. 어떤 환경에서 사용할 수 있고 실제 코드는 어떻게 작성하는가
-6. 이 방식이 잘 맞는 경우와 오히려 불필요한 경우는 무엇인가
+2. 다른 workflow와 agent 제품들은 비슷한 문제를 어떻게 관리하는가
+3. `ArtifactRef`와 선택적 hydrate가 어떤 역할을 하는가
+4. 메시지, 파일, Tool 결과를 어떻게 관리하는가
+5. 10명의 동시 사용자와 1,000턴을 어떻게 성능 테스트했는가
+6. 어떤 환경에서 사용할 수 있고 실제 코드는 어떻게 작성하는가
+7. 이 방식이 잘 맞는 경우와 오히려 불필요한 경우는 무엇인가
 
 ## 이 작업을 시작한 실제 고민
 
@@ -70,6 +71,91 @@ state에 계속 유지하면 체크포인트가 무거워진다. 이 두 선택�
 
 > 어떤 값은 checkpoint에 남기고, 어떤 값은 외부로 보내며, 어느 노드에서 얼마만큼 다시
 > 불러올 것인가?
+
+## 비슷한 문제를 다른 workflow 시스템은 어떻게 풀고 있을까
+
+이 고민은 LangGraph에만 있는 특수한 문제가 아니다. durable workflow나 task orchestration
+시스템은 실행 기록을 안정적으로 남겨야 하므로, 큰 payload를 실행 상태에 그대로 넣을 때
+비슷한 비용과 제한을 만난다.
+
+| 시스템 | 공식적으로 제시하는 방식 | 이 라이브러리와 닮은 점 |
+|---|---|---|
+| LangGraph / LangChain | checkpointer는 thread의 graph state를, Store는 graph state 밖의 application data를 맡긴다. 긴 대화는 오래된 메시지를 trim·delete·summarize하는 전략을 권한다. | checkpoint와 외부 데이터의 역할을 분리하고 메시지 state를 제한한다. |
+| AWS Step Functions | state 사이 payload가 256 KiB를 넘을 수 있으면 S3에 저장하고 bucket ARN과 key를 전달하도록 권한다. | 큰 본문 대신 저장 위치를 가리키는 작은 참조를 workflow가 전달한다. |
+| Temporal | payload가 크면 외부 저장소에 두고 Workflow나 Activity에는 참조를 전달하라고 안내한다. 긴 실행은 Continue-As-New 같은 방식으로 history도 관리한다. | 실행 history를 가볍게 유지하고 실제 데이터는 필요할 때 해석한다. |
+| Apache Airflow | XCom은 작은 값용이며, 임계값보다 큰 값은 object storage에 저장하고 DB에는 참조를 남기는 hybrid backend를 제공한다. | 크기 정책에 따라 inline과 external storage를 나누는 구조가 거의 같다. |
+
+공식 문서에서 확인할 수 있는 근거는 다음과 같다.
+
+- [LangGraph Persistence: checkpointer와 Store의 역할](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [LangChain Short-term memory: 긴 메시지 기록의 지연·비용과 관리 전략](https://docs.langchain.com/oss/python/langchain/short-term-memory)
+- [AWS Step Functions: 큰 payload 대신 S3 ARN 사용](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html#sfn-best-practices-avoid-exec-failures)
+- [Temporal: 큰 payload는 외부 저장 후 참조 전달](https://docs.temporal.io/references/workflow-task-errors#payloads-too-large)
+- [Airflow XCom: 임계값 기반 object storage backend](https://airflow.apache.org/docs/apache-airflow/2.10.5/core-concepts/xcoms.html#object-storage-xcom-backend)
+
+### 에이전트에서는 네 가지 문제를 구분해야 한다
+
+에이전트 제품을 조사하면 `memory`, `context`, `cache`, `file`이라는 단어가 섞여 나온다.
+하지만 각각 줄이는 비용과 보존하는 데이터가 다르다.
+
+| 관리 층 | 해결하려는 문제 | 대표적인 방법 | 이 프로젝트와의 관계 |
+|---|---|---|---|
+| Model context | 모델 입력 token이 너무 길어짐 | 최근 N개 유지, trim, compaction, tool 결과 제거 | `MessageWindow`가 일부 담당하지만 model prompt 구성은 application 책임이다. |
+| Long-term memory | 다음 대화에서도 선호·사실·경험을 기억해야 함 | 구조화 memory, semantic search, profile | 장기 memory 자체를 대체하지 않는다. 필요한 memory 결과를 artifact로 보관할 수는 있다. |
+| Artifact / source of truth | 파일·문서·Tool 원문이 크지만 다시 읽어야 함 | 외부 저장, ID/URI 전달, 필요한 부분만 retrieval | `ArtifactRef`, externalize, selective hydrate가 직접 담당하는 영역이다. |
+| Prompt / KV cache | 같은 prefix를 매 요청 다시 계산함 | prefix cache, context cache, cached token | 추론 비용은 줄이지만 checkpoint 크기나 전송 payload를 줄이지는 않는다. |
+
+따라서 “긴 대화를 요약하면 해결된다”거나 “context cache가 있으니 state 크기는 상관없다”는
+결론은 정확하지 않다. 요약과 compaction은 모델 입력을 줄이고, cache는 반복 계산을 줄인다.
+반면 artifact 외부화는 graph state와 checkpoint가 반복 운반하는 원문의 크기를 줄인다. 실제
+agent 서비스에서는 이 방법들을 서로 대체하기보다 함께 사용한다.
+
+### Agent SDK와 개발 플랫폼에서 보이는 패턴
+
+| 플랫폼 | 공식 문서에 공개된 방식 | 배울 점 |
+|---|---|---|
+| [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/sessions/) | Session에서 최근 N개만 가져오거나 입력 callback으로 history를 잘라낼 수 있고, `OpenAIResponsesCompactionSession`으로 긴 대화를 압축한다. | 저장된 전체 history와 이번 model call에 넣을 context를 분리한다. 자동 compaction은 streaming 종료를 늦출 수 있어 idle 시점 실행도 고려한다. |
+| [Anthropic context engineering](https://www.anthropic.com/research/effective-context-engineering-for-ai-agents) | compaction, 외부 structured note, sub-agent를 함께 사용하고 오래된 Tool 결과를 우선 정리한다. | 모든 trace를 context에 유지하기보다 고신호 정보만 남기고 원문은 외부에서 회수한다. |
+| [Google ADK](https://adk.dev/sessions/) | Session, State, Memory, Artifact, context compression을 서로 다른 서비스로 구분한다. [ArtifactService](https://adk.dev/artifacts/)는 파일·이미지 같은 named/versioned binary data를 별도로 저장한다. | 대화 상태, 장기 검색 memory, 큰 파일을 하나의 state 자료구조에 섞지 않는다. |
+| [Qwen-Agent](https://qwenlm.github.io/Qwen-Agent/en/guide/core_moduls/context/) | 한도에 도달하면 오래된 turn 제거, Tool response folding, Tool step 제거를 순서대로 적용한다. | 특히 Tool 결과부터 압축·제거한다는 점이 agent state 관리와 직접 연결된다. |
+| [Qwen Code Memory](https://qwenlm.github.io/qwen-code-docs/en/users/features/memory/) | 상세 memory는 Markdown 파일에 저장하고 `MEMORY.md`는 제한된 compact index로 유지한다. structured recall은 관련 subtree만 주입한다. | 원문 collection과 prompt에 넣는 index를 분리하는 2단 구조다. |
+| [Alibaba Model Studio Memory](https://help.aliyun.com/zh/model-studio/memory/overview/) | 대화에서 핵심 정보를 추출해 장기 저장하고, 이후 semantic retrieval로 관련 memory만 context에 주입한다. | cross-session memory도 전체 재주입보다 관련 항목의 선택적 recall을 사용한다. |
+| [DeepSeek API](https://api-docs.deepseek.com/guides/multi_round_chat/) | API는 stateless이므로 호출자가 이전 messages를 다시 보내야 한다. 별도의 [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/)가 동일 prefix의 재계산 비용을 줄인다. | cache hit가 빨라도 history payload 자체는 계속 커질 수 있다. 전송·직렬화와 추론 cache를 따로 측정해야 한다. |
+| [Volcengine Ark / Doubao](https://docs.volcengine.com/docs/ark/context-cache?lang=en) | implicit·explicit prefix cache와 session cache를 제공하며, session이 한도에 닿으면 오래된 history 일부를 제거해 다시 저장한다. | bounded history와 cache를 결합하지만, cache 저장량과 TTL도 별도 운영 대상이 된다. |
+| [Baidu Qianfan / ERNIE](https://cloud.baidu.com/doc/qianfan/s/Fmh4stv22) | application이 참조할 과거 대화 turn 수를 설정하고, 필요하면 knowledge base retrieval을 함께 사용한다. | history 길이를 명시적으로 제한하고 외부 지식은 retrieval로 가져오는 구조다. |
+
+### ChatGPT·Claude·Gemini·Grok과 중국계 챗봇의 제품 사례
+
+사용자용 챗봇에서도 비슷한 분리가 보인다. 아래 표는 공개된 제품 동작을 비교한 것이며, 각
+서비스의 내부 저장 구현이 `ArtifactRef`와 같다는 뜻은 아니다.
+
+| 서비스 | 사용자에게 보이는 관리 방식 | 이 글과 연결되는 지점 |
+|---|---|---|
+| [ChatGPT Memory](https://help.openai.com/en/articles/8590148-memory-faq) | memory summary, saved memory, past chat, file 같은 source를 구분하고 관련 source를 응답에 사용한다. [Projects](https://help.openai.com/en/articles/10169521-projects-in-chatgpt)는 chat·file·instruction을 한 범위로 묶는다. | 모든 과거 원문을 현재 chat message list에 합치는 대신, 서로 다른 source와 scope로 보존하고 관련 정보를 사용한다. |
+| [Claude Projects](https://support.anthropic.com/en/articles/9517075-what-are-projects) | project knowledge가 context 한도에 가까워지면 RAG를 사용해 더 큰 자료를 다룬다. [Past chat search](https://support.anthropic.com/en/articles/10185728-understanding-claude-s-personalization-features)도 필요한 이전 대화를 검색한다. | 큰 project knowledge와 현재 대화 context를 분리하고 필요한 자료를 retrieval한다. |
+| [Gemini](https://blog.google/products-and-platforms/products/gemini/temporary-chats-privacy-controls/) | past chats를 개인화에 사용할 수 있고, Temporary Chat은 이후 개인화와 history에서 제외한다. | 대화마다 보존 범위를 달리하고, 장기 memory에 포함할 정보와 일회성 context를 구분한다. |
+| [Grok Files·Collections](https://docs.x.ai/developers/files) | chat 파일은 ID로 첨부하고 여러 turn에서 유지한다. 많은 문서는 [Collections Search](https://docs.x.ai/developers/tools/collections-search)로 semantic retrieval한다. | 즉시 사용하는 파일과 장기 document collection을 나누고 검색된 자료만 agent가 사용한다. |
+| [Kimi Memory](https://www.kimi.com/help/features/memory-space) | memory space를 파일 형태로 관리하고 past conversation에서 관련 memory를 참조한다. [Projects](https://www.kimi.com/help/features/project)는 instruction·conversation·file을 묶고 project file을 필요할 때 읽는다. | memory index, project file, 현재 conversation을 분리한다. 긴 대화가 한도에 닿으면 요약 후 새 chat으로 이어가도록 안내한다. |
+| [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/features/memory/) | session마다 새 context로 시작하되 `QWEN.md`, auto-memory 파일, 제한된 `MEMORY.md` index로 지식을 이어간다. | 복구 가능한 원문 파일과 매번 주입하는 compact index를 분리한다. |
+| [DeepSeek](https://api-docs.deepseek.com/guides/responses_api/) | 공식 API는 server conversation 저장과 automatic truncation을 제공하지 않고 stateless 입력과 자동 context cache를 제공한다. | cache는 비용 최적화일 뿐 state lifecycle을 대신하지 않으므로 application이 window·archive·artifact 정책을 가져야 한다. |
+| [Doubao / Ark](https://docs.volcengine.com/docs/ark/doubao-assistant?lang=en) | 저장된 conversation ID로 이어갈 수 있고, platform 측 history turn·session cache 정책과 knowledge retrieval을 조합한다. | thread ID와 제한된 history, 외부 knowledge를 조합하는 방식이다. |
+| [ERNIE / Qianfan](https://cloud.baidu.com/doc/qianfan/s/Fmh4stv22) | 참조할 과거 turn 수를 조절하며 knowledge base fallback이나 retrieval을 붙인다. | 오래된 대화를 무한정 현재 context에 넣지 않고 별도 지식 경로를 둔다. |
+
+이 비교에서 가장 흥미로운 사례는 Kimi와 Qwen Code다. 둘 다 장기 memory를 파일이나 collection에
+보존하면서, 현재 context에는 제한된 index 또는 관련 항목만 넣는 방향을 명시한다. Grok과
+Claude Projects도 큰 문서 집합을 현재 message history와 분리하고 검색으로 접근한다. 이는
+“원문은 복구 가능한 곳에 남기고 실행 경로에는 작은 선택 결과만 보낸다”는 이 프로젝트의
+문제의식과 가깝다.
+
+공통점은 분명하다. 큰 데이터를 workflow 실행 상태에 계속 실어 나르기보다 외부 저장소에 두고,
+workflow에는 작은 참조를 전달한다. `langgraph-artifact-memory`는 이 검증된 패턴을 LangGraph의
+state channel, reducer, `thread_id`, wrapped node에 바로 연결하려는 시도다. 또한 파일 원문
+외부화와 메시지 window/archive를 함께 다뤄, 두 종류의 state가 동시에 커지는 agent workflow를
+대상으로 한다.
+
+즉, 이 프로젝트는 낯선 최적화를 새로 발명하려는 것이 아니다. 여러 workflow 시스템에서 이미
+사용하는 원칙을 LangGraph 개발자가 기존 graph 구조를 크게 바꾸지 않고 적용하도록 만드는
+것에 가깝다.
 
 ## 문제는 Redis가 아니라 반복해서 저장하는 state의 형태였다
 
@@ -108,6 +194,129 @@ flowchart LR
 왼쪽은 모든 노드와 checkpoint가 큰 원문을 계속 전달하는 방식이다. 오른쪽은 원문을 한 번
 artifact store에 저장하고 state에는 `ArtifactRef`만 남긴다. answer 노드처럼 본문이 필요한
 곳에서도 전체를 복원하지 않고 `last_n`, `max_bytes` 같은 정책 안에서 선택적으로 읽는다.
+
+## 먼저 예시로 보기: 문서 3개 중 최근 2개만 사용하기
+
+내부 구조를 설명하기 전에 가장 작은 사용 장면부터 보자. 사용자가 문서 3개를 올렸고,
+`answer` 노드는 그중 최근 2개만 읽어 답을 만든다고 가정한다.
+
+```mermaid
+flowchart LR
+    INPUT["문서 3개 입력"] --> SAVE["원문 3개 외부 저장"]
+    SAVE --> STATE["state에는 ArtifactRef 3개"]
+    STATE --> ANSWER["answer 노드에서 최근 2개 복원"]
+    ANSWER --> RESULT["답변 생성"]
+    RESULT -. checkpoint .-> STATE
+```
+
+Redis 없이 메모리 저장소만 사용하면 다음 코드를 그대로 실행해볼 수 있다.
+
+```python
+import asyncio
+import operator
+from typing import Annotated, Any
+
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+from typing_extensions import TypedDict
+
+from langgraph_artifact_memory import (
+    ArtifactMemory,
+    ArtifactRef,
+    Externalize,
+    Hydrate,
+    InMemoryArtifactStore,
+)
+
+
+class State(TypedDict, total=False):
+    documents: Annotated[
+        list[dict[str, Any] | ArtifactRef],
+        operator.add,
+    ]
+    answer: str
+
+
+async def main() -> None:
+    memory = ArtifactMemory(
+        InMemoryArtifactStore(),
+        externalize={
+            "documents": Externalize(itemized=True),
+        },
+        state_schema=State,
+        validation="strict",
+    )
+
+    def answer_node(state: State) -> dict[str, str]:
+        # 이 노드 안에서만 최근 문서 2개가 실제 dict로 보인다.
+        titles = [document["title"] for document in state["documents"]]
+        return {"answer": f"참고한 문서: {', '.join(titles)}"}
+
+    graph = (
+        StateGraph(State)
+        .add_node(
+            "answer",
+            memory.wrap(
+                answer_node,
+                hydrate={
+                    "documents": Hydrate(last_n=2),
+                },
+            ),
+        )
+        .add_edge(START, "answer")
+        .add_edge("answer", END)
+        .compile(checkpointer=InMemorySaver())
+    )
+
+    result = await memory.ainvoke(
+        graph,
+        {
+            "documents": [
+                {"title": "첫 번째 문서", "content": "A" * 4096},
+                {"title": "두 번째 문서", "content": "B" * 4096},
+                {"title": "세 번째 문서", "content": "C" * 4096},
+            ],
+        },
+        {"configurable": {"thread_id": "quickstart-thread"}},
+    )
+
+    print(result["answer"])
+    print(result["documents"])
+
+
+asyncio.run(main())
+```
+
+실행 결과의 핵심은 두 가지다.
+
+```text
+참고한 문서: 두 번째 문서, 세 번째 문서
+[
+  {"artifact_key": "...", "size_bytes": 4139},
+  {"artifact_key": "...", "size_bytes": 4139},
+  {"artifact_key": "...", "size_bytes": 4139}
+]
+```
+
+`artifact_key`와 `size_bytes`는 실제 payload와 실행 환경에 따라 달라진다.
+
+`answer_node` 안에서는 최근 문서 2개가 실제 딕셔너리로 보인다. 그러나 노드 실행이 끝난 뒤
+반환된 graph state와 checkpoint에는 문서 원문이 아니라 작은 `ArtifactRef` 3개가 남는다.
+즉, 개발자는 기존처럼 `state["documents"]`를 읽어 답을 만들면서도 checkpoint가 매번 원문을
+반복 저장하지 않게 할 수 있다.
+
+| 코드 | 하는 일 |
+|---|---|
+| `Externalize(itemized=True)` | 입력된 문서를 하나씩 artifact store에 저장하고 참조로 교체한다. |
+| `memory.ainvoke(...)` | 최초 input checkpoint가 만들어지기 전에 외부화를 수행한다. |
+| `memory.wrap(answer_node, ...)` | 해당 노드가 실행되는 동안만 선택한 참조를 실제 값으로 복원한다. |
+| `Hydrate(last_n=2)` | 전체 3개가 아니라 가장 최근 문서 2개만 읽는다. |
+| `thread_id` | checkpoint와 artifact를 같은 대화 범위로 묶는다. |
+
+여기서 이 라이브러리의 역할을 한 문장으로 정리할 수 있다.
+
+> LangGraph state에 들어오고 나가는 무거운 값을 자동으로 참조로 바꾸고, 실제 값이 필요한
+> 노드에서만 정해진 범위만큼 잠시 복원한다.
 
 ## state를 control plane과 data plane으로 나누기
 
@@ -246,7 +455,10 @@ cd langgraph-artifact-memory
 pip install -e ".[redis]"
 ```
 
-## 가장 작은 사용 예제
+## 실제 프로젝트에 적용하는 단계별 예제
+
+앞의 quickstart가 전체 동작을 한 번에 보여줬다면, 여기서는 메시지 관리, Redis 저장소,
+timeout과 retry까지 포함해 실제 프로젝트 설정을 단계별로 살펴본다.
 
 ### 1. state가 실제 값과 참조를 모두 받을 수 있게 선언한다
 
@@ -631,32 +843,6 @@ artifact를 먼저 삭제하면 남아 있는 체크포인트가 깨진 참조�
 잘못 자동화하면 모든 노드가 불필요한 I/O를 수행하거나 replay가 깨질 수 있다. 이
 라이브러리의 목표는 모든 데이터를 자동 판단하는 것이 아니라, 개발자가 명시한 정책을
 LangGraph의 `thread_id`, reducer, wrapper, message archive에 일관되게 연결하는 것이다.
-
-## 비슷한 문제를 다른 workflow 시스템은 어떻게 풀고 있을까
-
-이 고민은 LangGraph에만 있는 특수한 문제가 아니다. durable workflow나 task orchestration
-시스템은 실행 기록을 안정적으로 남겨야 하므로, 큰 payload를 실행 상태에 그대로 넣을 때
-비슷한 비용과 제한을 만난다.
-
-| 시스템 | 공식적으로 제시하는 방식 | 이 라이브러리와 닮은 점 |
-|---|---|---|
-| LangGraph / LangChain | checkpointer는 thread의 graph state를, Store는 graph state 밖의 application data를 맡긴다. 긴 대화는 오래된 메시지를 trim·delete·summarize하는 전략을 권한다. | checkpoint와 외부 데이터의 역할을 분리하고 메시지 state를 제한한다. |
-| AWS Step Functions | state 사이 payload가 256 KiB를 넘을 수 있으면 S3에 저장하고 bucket ARN과 key를 전달하도록 권한다. | 큰 본문 대신 저장 위치를 가리키는 작은 참조를 workflow가 전달한다. |
-| Temporal | payload가 크면 외부 저장소에 두고 Workflow나 Activity에는 참조를 전달하라고 안내한다. 긴 실행은 Continue-As-New 같은 방식으로 history도 관리한다. | 실행 history를 가볍게 유지하고 실제 데이터는 필요할 때 해석한다. |
-| Apache Airflow | XCom은 작은 값용이며, 임계값보다 큰 값은 object storage에 저장하고 DB에는 참조를 남기는 hybrid backend를 제공한다. | 크기 정책에 따라 inline과 external storage를 나누는 구조가 거의 같다. |
-
-공식 문서에서 확인할 수 있는 근거는 다음과 같다.
-
-- [LangGraph Persistence: checkpointer와 Store의 역할](https://docs.langchain.com/oss/python/langgraph/persistence)
-- [LangChain Short-term memory: 긴 메시지 기록의 지연·비용과 관리 전략](https://docs.langchain.com/oss/python/langchain/short-term-memory)
-- [AWS Step Functions: 큰 payload 대신 S3 ARN 사용](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html#sfn-best-practices-avoid-exec-failures)
-- [Temporal: 큰 payload는 외부 저장 후 참조 전달](https://docs.temporal.io/references/workflow-task-errors#payloads-too-large)
-- [Airflow XCom: 임계값 기반 object storage backend](https://airflow.apache.org/docs/apache-airflow/2.10.5/core-concepts/xcoms.html#object-storage-xcom-backend)
-
-차이는 적용 단위다. 이 프로젝트는 범용 object storage abstraction을 새로 만들기보다
-LangGraph의 state channel, reducer, `thread_id`, wrapped node에 이 패턴을 바로 연결한다.
-또한 원문 외부화와 메시지 window/archive를 함께 다뤄, 파일과 대화 기록이 동시에 커지는
-agent workflow를 대상으로 한다.
 
 ## 현재 한계와 다음 단계
 
