@@ -1,6 +1,6 @@
 # langgraph-artifact-memory
 
-[English](README.md)
+[English](README.md) · [만들게 된 배경과 성능 실험](docs/blog/introducing-langgraph-artifact-memory-ko.md)
 
 LangGraph 체크포인트에는 작은 `ArtifactRef`만 남기고, 문서·Tool 결과 같은 무거운 값은
 별도 저장소에서 관리하는 라이브러리입니다.

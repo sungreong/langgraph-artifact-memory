@@ -1,6 +1,6 @@
 # langgraph-artifact-memory
 
-[한국어 문서](README.kr.md)
+[한국어 문서](README.kr.md) · [Background and benchmark story (한국어)](docs/blog/introducing-langgraph-artifact-memory-ko.md)
 
 Keep heavy values outside LangGraph checkpoints and store compact `ArtifactRef` values in state.
 
