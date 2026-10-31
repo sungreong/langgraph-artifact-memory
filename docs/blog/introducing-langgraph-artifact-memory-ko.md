@@ -12,6 +12,8 @@ coverImage: "./images/langgraph-artifact-memory-hero-v2.png"
 theme: paper
 intent: narrative
 toc: true
+tocDepth: 3
+tocStyle: flat
 frame: none
 appearanceFrame: none
 viewerChrome: hidden
@@ -80,7 +82,9 @@ state에 계속 유지하면 체크포인트가 무거워진다. 이 두 선택�
 
 | 시스템 | 공식적으로 제시하는 방식 | 이 라이브러리와 닮은 점 |
 |---|---|---|
-| LangGraph / LangChain | checkpointer는 thread의 graph state를, Store는 graph state 밖의 application data를 맡긴다. 긴 대화는 오래된 메시지를 trim·delete·summarize하는 전략을 권한다. | checkpoint와 외부 데이터의 역할을 분리하고 메시지 state를 제한한다. |
+| LangGraph core | Checkpointer는 thread의 graph state snapshot을, Store는 graph state 밖의 JSON application data를 맡긴다. | checkpoint와 외부 데이터의 역할을 나누는 기반 primitive를 제공한다. |
+| LangChain agent | 긴 대화에는 message trim·delete와 `SummarizationMiddleware`를 제공한다. | 모델 context와 message state가 무한히 커지지 않게 제한한다. |
+| Deep Agents | filesystem backend로 큰 Tool 결과를 offload하고, 선택적으로 binary content를 content-addressed reference로 바꾼다. | 큰 결과를 외부 backend에 두고 실행 경로에는 작은 참조를 남긴다는 점에서 가장 가깝다. |
 | AWS Step Functions | state 사이 payload가 256 KiB를 넘을 수 있으면 S3에 저장하고 bucket ARN과 key를 전달하도록 권한다. | 큰 본문 대신 저장 위치를 가리키는 작은 참조를 workflow가 전달한다. |
 | Temporal | payload가 크면 외부 저장소에 두고 Workflow나 Activity에는 참조를 전달하라고 안내한다. 긴 실행은 Continue-As-New 같은 방식으로 history도 관리한다. | 실행 history를 가볍게 유지하고 실제 데이터는 필요할 때 해석한다. |
 | Apache Airflow | XCom은 작은 값용이며, 임계값보다 큰 값은 object storage에 저장하고 DB에는 참조를 남기는 hybrid backend를 제공한다. | 크기 정책에 따라 inline과 external storage를 나누는 구조가 거의 같다. |
@@ -88,10 +92,100 @@ state에 계속 유지하면 체크포인트가 무거워진다. 이 두 선택�
 공식 문서에서 확인할 수 있는 근거는 다음과 같다.
 
 - [LangGraph Persistence: checkpointer와 Store의 역할](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [LangChain Long-term memory: Store의 namespace·key 기반 JSON document](https://docs.langchain.com/oss/python/langchain/long-term-memory)
 - [LangChain Short-term memory: 긴 메시지 기록의 지연·비용과 관리 전략](https://docs.langchain.com/oss/python/langchain/short-term-memory)
+- [Deep Agents overview: history 요약과 큰 결과 offload](https://docs.langchain.com/oss/python/deepagents/overview)
+- [Deep Agents backends: Tool 결과·binary content의 filesystem offload](https://docs.langchain.com/oss/python/deepagents/backends)
 - [AWS Step Functions: 큰 payload 대신 S3 ARN 사용](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html#sfn-best-practices-avoid-exec-failures)
 - [Temporal: 큰 payload는 외부 저장 후 참조 전달](https://docs.temporal.io/references/workflow-task-errors#payloads-too-large)
 - [Airflow XCom: 임계값 기반 object storage backend](https://airflow.apache.org/docs/apache-airflow/2.10.5/core-concepts/xcoms.html#object-storage-xcom-backend)
+
+### 이미 있는 기능인데 왜 이 라이브러리를 쓰는가
+
+결론부터 말하면 `langgraph-artifact-memory`는 새로운 database나 checkpoint 알고리즘을
+발명한 프로젝트가 아니다. LangGraph에는 이미 Checkpointer와 Store가 있고, LangChain에는
+메시지 trim·delete·summarize가 있다. Deep Agents까지 사용하면 filesystem backend와 큰 Tool
+결과 offload도 얻을 수 있다.
+
+차이는 **primitive의 존재**와 **기존 custom `StateGraph`에서 반복 구현 없이 사용할 수 있는
+정책 계층의 존재** 사이에 있다.
+
+| 필요한 기능 | 기존 공식 기능 | custom `StateGraph`에서 여전히 정해야 하는 것 |
+|---|---|---|
+| thread 실행 상태 저장 | Checkpointer가 graph state snapshot을 저장한다. | 어떤 큰 값을 snapshot 전에 state 밖으로 뺄지는 application이 정한다. |
+| graph 밖의 데이터 저장 | Store가 namespace와 key로 JSON document를 저장·검색한다. | state 값 대신 어떤 reference를 남기고 어떻게 직렬화할지 직접 설계한다. |
+| 긴 메시지 관리 | trim, `RemoveMessage`, `SummarizationMiddleware`가 있다. | 원문 보존, keep 상한, archive 조회와 artifact 수명주기는 별도로 만든다. |
+| 큰 Tool 결과 관리 | Deep Agents가 큰 결과를 filesystem backend로 offload한다. | 일반 `StateGraph`의 임의 channel과 reducer에 같은 정책을 적용하는 API는 별도다. |
+| 필요한 값만 다시 읽기 | Store와 filesystem에서 직접 `get`·`read`할 수 있다. | 노드별 최근 N개, byte 예산, 복원 후 재외부화를 매번 구현한다. |
+| 운영 안정성 | 각 backend와 middleware가 개별 기능을 제공한다. | timeout, retry, 동시성, schema 검증, metric과 scope 삭제를 한 정책으로 묶어야 한다. |
+
+공식 public API를 기준으로 보면, 일반 LangGraph `StateGraph`에 다음과 같은 선언을 붙여 임의의
+state channel을 checkpoint 전에 자동 외부화하고, 특정 노드에서만 byte 예산 안으로 복원하는
+통합 API는 제공되지 않는다. 이는 “LangGraph로 구현할 수 없다”는 뜻이 아니라, Store와 node
+코드로 직접 조합해야 한다는 뜻이다.
+
+```python
+memory = ArtifactMemory(
+    store,
+    externalize={
+        "documents": Externalize(itemized=True),
+        "tool_results": Externalize(itemized=True),
+    },
+    message_window=MessageWindow(max_messages=20),
+    state_schema=State,
+    validation="strict",
+)
+```
+
+이 설정 하나가 대신 연결하는 작업은 다음과 같다.
+
+1. 최초 input checkpoint가 생기기 전에 실제 값을 외부 저장한다.
+2. state에는 `artifact_key`와 `size_bytes`만 남긴다.
+3. `thread_id`와 state channel을 artifact scope에 연결한다.
+4. 지정한 노드에서만 `last_n`, `max_bytes` 안으로 복원한다.
+5. 노드 반환값에 다시 큰 값이 들어오면 checkpoint 전에 참조로 바꾼다.
+6. reducer와 state schema가 정책과 맞지 않으면 조기에 오류를 낸다.
+7. I/O timeout, retry, queue wait와 실제 put/get byte를 같은 metric에서 본다.
+
+따라서 이 프로젝트의 차별점은 저장 primitive 하나가 아니라 다음 조합이다.
+
+> 임의의 LangGraph state channel 외부화 + checkpoint-safe reference + 노드별 선택 복원 +
+> message archive + 운영 정책을 기존 graph topology를 바꾸지 않고 한 API로 연결한다.
+
+### 가장 가까운 기존 기능은 Deep Agents다
+
+Deep Agents는 이 문제를 훨씬 적극적으로 다룬다. 큰 Tool 결과를 `/large_tool_results/`에
+offload하고, binary content offload를 켜면 message history의 inline media를
+content-addressed reference로 교체한 뒤 model call 전에 복원한다. 긴 history를 자동 요약하는
+middleware도 기본 stack에 포함한다.
+
+그래서 Deep Agents를 이미 agent harness로 선택했다면 먼저 그 기능을 사용하는 것이 자연스럽다.
+`langgraph-artifact-memory`가 겨냥하는 범위는 조금 다르다.
+
+| 비교 축 | Deep Agents | `langgraph-artifact-memory` |
+|---|---|---|
+| 적용 대상 | `create_deep_agent` harness와 filesystem 도구 | 기존 custom `StateGraph`와 state schema |
+| 주 대상 데이터 | Tool 결과, conversation history, file·binary content | 사용자가 지정한 임의 state key와 메시지 |
+| 외부화 시점 | middleware와 filesystem 도구의 context 관리 시점 | `memory.ainvoke()`로 최초 input checkpoint 전, wrapped node 반환 후 |
+| 복원 방식 | agent가 filesystem 도구로 읽거나 model call 전에 복원 | 노드별 `Hydrate(last_n, max_bytes)`로 전달 |
+| 저장 backend | State, filesystem, Store, sandbox, composite backend | InMemory, Local, Redis `ArtifactStore` |
+| 운영 초점 | 범용 agent harness와 context engineering | checkpoint 크기, state reducer, artifact I/O 계측 |
+
+Deep Agents 문서도 binary input의 원본이 이전 checkpoint에 남을 수 있다고 설명한다. 반면 이
+라이브러리의 `memory.ainvoke()`는 외부화 대상 input을 graph에 넘기기 전에 참조로 바꾸는 것을
+명시적인 계약으로 둔다. 어느 방식이 더 낫다기보다, 이미 Deep Agents를 쓰는지 아니면 custom
+LangGraph workflow를 유지해야 하는지가 선택 기준이다.
+
+### 상황별로 무엇을 선택하면 되는가
+
+| 상황 | 먼저 선택할 방법 |
+|---|---|
+| 문제의 대부분이 긴 `messages`와 model token이다 | LangChain의 trim·delete·`SummarizationMiddleware` |
+| 사용자 선호나 사실을 여러 thread에서 공유한다 | LangGraph Store와 long-term memory |
+| planning, filesystem, sub-agent까지 포함한 agent harness가 필요하다 | Deep Agents의 built-in context management |
+| state key 한두 개를 가끔 외부 저장한다 | Store 또는 기존 object storage를 node에서 직접 호출 |
+| 기존 custom `StateGraph`에 문서·Tool 결과가 여러 channel로 누적된다 | `langgraph-artifact-memory`의 선언형 externalize/hydrate |
+| 모든 노드가 항상 전체 payload를 사용한다 | 외부화보다 state 설계나 retrieval 경계를 먼저 재검토 |
 
 ### 에이전트에서는 네 가지 문제를 구분해야 한다
 
@@ -149,13 +243,12 @@ Claude Projects도 큰 문서 집합을 현재 message history와 분리하고 �
 
 공통점은 분명하다. 큰 데이터를 workflow 실행 상태에 계속 실어 나르기보다 외부 저장소에 두고,
 workflow에는 작은 참조를 전달한다. `langgraph-artifact-memory`는 이 검증된 패턴을 LangGraph의
-state channel, reducer, `thread_id`, wrapped node에 바로 연결하려는 시도다. 또한 파일 원문
-외부화와 메시지 window/archive를 함께 다뤄, 두 종류의 state가 동시에 커지는 agent workflow를
-대상으로 한다.
+state channel, reducer, `thread_id`, wrapped node에 바로 연결한다. 또한 파일 원문 외부화와
+메시지 window/archive, schema 검증, I/O metric을 함께 다뤄 두 종류의 state가 동시에 커지는
+custom workflow에서 반복되는 코드를 줄인다.
 
-즉, 이 프로젝트는 낯선 최적화를 새로 발명하려는 것이 아니다. 여러 workflow 시스템에서 이미
-사용하는 원칙을 LangGraph 개발자가 기존 graph 구조를 크게 바꾸지 않고 적용하도록 만드는
-것에 가깝다.
+즉, 이 프로젝트의 새로움은 저장 기술의 발명이 아니라 **이미 존재하는 primitive를 임의 state
+channel 단위로 선언하고, checkpoint 전후와 node 경계에서 일관되게 실행하는 통합 방식**에 있다.
 
 ## 문제는 Redis가 아니라 반복해서 저장하는 state의 형태였다
 
@@ -886,7 +979,9 @@ inline 방식이 더 단순하고 빠를 수 있다.
 - async timeout, retry, backoff, 동시성·capacity 제한
 - checkpoint와 artifact I/O를 비교할 수 있는 metric과 benchmark
 
-### [GitHub에서 langgraph-artifact-memory 보기](https://github.com/sungreong/langgraph-artifact-memory)
+### GitHub에서 langgraph-artifact-memory 보기
+
+[GitHub 저장소에서 코드와 예제 확인하기](https://github.com/sungreong/langgraph-artifact-memory)
 
 실제 워크플로우는 문서 크기, node 수, Redis 지연, 보존 정책이 모두 다르다. 그래서 이 저장소의
 결과를 그대로 믿기보다 자신의 workload에서 benchmark를 실행해보고, 잘 맞지 않는 사례까지
