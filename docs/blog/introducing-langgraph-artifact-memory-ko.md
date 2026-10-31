@@ -8,14 +8,20 @@ tags:
   - Redis
   - Python
   - AI Agent
-coverImage: "./images/langgraph-artifact-memory-hero.png"
+coverImage: "./images/langgraph-artifact-memory-hero-v2.png"
+theme: paper
+intent: narrative
+toc: true
+frame: none
+appearanceFrame: none
+viewerChrome: hidden
 ---
 
 # 대화가 길어질수록 느려지는 LangGraph state, ArtifactRef로 가볍게 만들기
 
 > `langgraph-artifact-memory`를 만들게 된 이유부터 설계, 성능 검증, 실제 적용 방법까지
 
-![무거운 state를 매번 체크포인트에 저장하는 구조와 작은 참조만 전달하는 구조의 대비](./images/langgraph-artifact-memory-hero.png)
+![LangGraph 노드 사이에는 작은 참조가 흐르고 큰 payload는 외부 저장소에서 선택적으로 복원되는 구조](./images/langgraph-artifact-memory-hero-v2.png)
 
 LangGraph로 대화형 워크플로우를 만들다 보면 어느 순간 이런 고민을 하게 된다.
 
@@ -38,6 +44,32 @@ state에 계속 유지하면 체크포인트가 무거워진다. 이 두 선택�
 4. 10명의 동시 사용자와 1,000턴을 어떻게 성능 테스트했는가
 5. 어떤 환경에서 사용할 수 있고 실제 코드는 어떻게 작성하는가
 6. 이 방식이 잘 맞는 경우와 오히려 불필요한 경우는 무엇인가
+
+## 이 작업을 시작한 실제 고민
+
+처음 질문은 “Python 대신 Rust로 만들면 빨라질까?”였다. 하지만 구현 언어를 바꾸기 전에
+어디에서 시간이 늘어나는지부터 구분해야 했다. 대화가 길어졌을 때 느려지는 원인은 하나가
+아닐 수 있기 때문이다.
+
+| 처음 의심한 지점 | 확인하고 싶었던 것 |
+|---|---|
+| `messages` 누적 | prompt token뿐 아니라 state 직렬화와 checkpoint 읽기도 느려지는가 |
+| 파일·검색 문서·Tool 결과 누적 | 사용하지 않는 노드에서도 같은 원문이 반복 저장되는가 |
+| reducer의 list merge | 리스트가 길어질수록 병합과 객체 생성 비용이 커지는가 |
+| Redis checkpointer | Redis 자체가 느린가, 아니면 전송하는 state가 커져서 느린가 |
+| 외부 저장소 분리 | put/get 왕복 비용이 checkpoint 절감 효과보다 커지지는 않는가 |
+| 동시 사용자 증가 | 한 명에게 유효한 최적화가 공유 Redis에서도 유지되는가 |
+
+그래서 처음부터 라이브러리를 정답으로 놓지 않았다. 먼저 inline state를 100턴까지 누적하고,
+채널별 byte와 checkpoint I/O를 측정했다. 그다음 10개의 독립 `thread_id`를 동시에 실행했다.
+마지막으로 동일한 원문을 외부 저장하되 answer 노드가 실제로 다시 읽게 만들어 전체 시간을
+비교했다. 외부화의 저장·조회 비용을 숨기지 않기 위해서였다.
+
+이 과정을 거치며 목표도 바뀌었다. “무조건 저장을 줄이는 도구”가 아니라 다음 질문에 답하는
+작은 계층이 필요했다.
+
+> 어떤 값은 checkpoint에 남기고, 어떤 값은 외부로 보내며, 어느 노드에서 얼마만큼 다시
+> 불러올 것인가?
 
 ## 문제는 Redis가 아니라 반복해서 저장하는 state의 형태였다
 
@@ -70,6 +102,12 @@ flowchart LR
 
 > 그래프 실행에 필요한 상태와, 나중에 다시 읽을 수 있어야 하는 무거운 본문을 같은 곳에
 > 같은 형태로 보관해야 하는가?
+
+![AS-IS는 원문이 state와 Redis checkpoint에 반복 누적되고 TO-BE는 원문을 외부 저장한 뒤 ArtifactRef만 전달하는 비교](./images/langgraph-artifact-memory-as-is-to-be-ko.png)
+
+왼쪽은 모든 노드와 checkpoint가 큰 원문을 계속 전달하는 방식이다. 오른쪽은 원문을 한 번
+artifact store에 저장하고 state에는 `ArtifactRef`만 남긴다. answer 노드처럼 본문이 필요한
+곳에서도 전체를 복원하지 않고 `last_n`, `max_bytes` 같은 정책 안에서 선택적으로 읽는다.
 
 ## state를 control plane과 data plane으로 나누기
 
@@ -594,6 +632,32 @@ artifact를 먼저 삭제하면 남아 있는 체크포인트가 깨진 참조�
 라이브러리의 목표는 모든 데이터를 자동 판단하는 것이 아니라, 개발자가 명시한 정책을
 LangGraph의 `thread_id`, reducer, wrapper, message archive에 일관되게 연결하는 것이다.
 
+## 비슷한 문제를 다른 workflow 시스템은 어떻게 풀고 있을까
+
+이 고민은 LangGraph에만 있는 특수한 문제가 아니다. durable workflow나 task orchestration
+시스템은 실행 기록을 안정적으로 남겨야 하므로, 큰 payload를 실행 상태에 그대로 넣을 때
+비슷한 비용과 제한을 만난다.
+
+| 시스템 | 공식적으로 제시하는 방식 | 이 라이브러리와 닮은 점 |
+|---|---|---|
+| LangGraph / LangChain | checkpointer는 thread의 graph state를, Store는 graph state 밖의 application data를 맡긴다. 긴 대화는 오래된 메시지를 trim·delete·summarize하는 전략을 권한다. | checkpoint와 외부 데이터의 역할을 분리하고 메시지 state를 제한한다. |
+| AWS Step Functions | state 사이 payload가 256 KiB를 넘을 수 있으면 S3에 저장하고 bucket ARN과 key를 전달하도록 권한다. | 큰 본문 대신 저장 위치를 가리키는 작은 참조를 workflow가 전달한다. |
+| Temporal | payload가 크면 외부 저장소에 두고 Workflow나 Activity에는 참조를 전달하라고 안내한다. 긴 실행은 Continue-As-New 같은 방식으로 history도 관리한다. | 실행 history를 가볍게 유지하고 실제 데이터는 필요할 때 해석한다. |
+| Apache Airflow | XCom은 작은 값용이며, 임계값보다 큰 값은 object storage에 저장하고 DB에는 참조를 남기는 hybrid backend를 제공한다. | 크기 정책에 따라 inline과 external storage를 나누는 구조가 거의 같다. |
+
+공식 문서에서 확인할 수 있는 근거는 다음과 같다.
+
+- [LangGraph Persistence: checkpointer와 Store의 역할](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [LangChain Short-term memory: 긴 메시지 기록의 지연·비용과 관리 전략](https://docs.langchain.com/oss/python/langchain/short-term-memory)
+- [AWS Step Functions: 큰 payload 대신 S3 ARN 사용](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html#sfn-best-practices-avoid-exec-failures)
+- [Temporal: 큰 payload는 외부 저장 후 참조 전달](https://docs.temporal.io/references/workflow-task-errors#payloads-too-large)
+- [Airflow XCom: 임계값 기반 object storage backend](https://airflow.apache.org/docs/apache-airflow/2.10.5/core-concepts/xcoms.html#object-storage-xcom-backend)
+
+차이는 적용 단위다. 이 프로젝트는 범용 object storage abstraction을 새로 만들기보다
+LangGraph의 state channel, reducer, `thread_id`, wrapped node에 이 패턴을 바로 연결한다.
+또한 원문 외부화와 메시지 window/archive를 함께 다뤄, 파일과 대화 기록이 동시에 커지는
+agent workflow를 대상으로 한다.
+
 ## 현재 한계와 다음 단계
 
 현재 구현은 MVP이며 다음 한계가 있다.
@@ -623,6 +687,33 @@ inline 방식이 더 단순하고 빠를 수 있다.
 대화가 길어질수록 느려지는 원인을 찾고 있거나, Redis 체크포인트에 문서와 Tool 결과가 계속
 누적되고 있다면 먼저 어떤 채널이 얼마나 커지는지 측정해보자. 그다음 가장 무거운 채널 하나만
 참조로 바꿔 비교해보는 것이 좋은 출발점이다.
+
+## 직접 사용해보고 의견을 남겨주세요
+
+`langgraph-artifact-memory`는 현재 `ArtifactRef` 외부화만 제공하는 작은 실험을 넘어 다음을
+한 패키지에서 다룬다.
+
+- `InMemoryArtifactStore`, `LocalArtifactStore`, `RedisArtifactStore`
+- node별 선택 hydrate와 byte 제한
+- message window, keep 정책, 원문 archive
+- state schema와 node 반환값 검증
+- async timeout, retry, backoff, 동시성·capacity 제한
+- checkpoint와 artifact I/O를 비교할 수 있는 metric과 benchmark
+
+### [GitHub에서 langgraph-artifact-memory 보기](https://github.com/sungreong/langgraph-artifact-memory)
+
+실제 워크플로우는 문서 크기, node 수, Redis 지연, 보존 정책이 모두 다르다. 그래서 이 저장소의
+결과를 그대로 믿기보다 자신의 workload에서 benchmark를 실행해보고, 잘 맞지 않는 사례까지
+공유해주면 좋겠다. 버그는 Issue로, 새로운 backend나 hydrate 정책 아이디어는 Discussion 또는
+PR로 남겨주면 재현 가능한 테스트를 기준으로 개선해 나갈 계획이다.
+
+특히 다음 피드백을 기다리고 있다.
+
+- 실제 서비스에서 checkpoint가 커지는 state channel 사례
+- Redis, Local, InMemory backend별 benchmark 결과
+- S3·MinIO backend와 transaction·garbage collection 요구사항
+- `last_n + max_bytes`로 부족했던 검색·복원 패턴
+- Windows, Linux, 컨테이너 환경에서 발견한 호환성 문제
 
 ## 링크
 
