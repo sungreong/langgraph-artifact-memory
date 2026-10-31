@@ -589,15 +589,20 @@
   color: var(--doc-accent);
 }
 
-.toc-depth-2 {
-  margin-left: 14px;
+.toc-depth-2,
+.toc-depth-3,
+.toc-depth-4,
+.toc-depth-5,
+.toc-depth-6 {
+  margin-left: 0;
 }
 
 .toc-depth-3,
 .toc-depth-4,
 .toc-depth-5,
 .toc-depth-6 {
-  margin-left: 28px;
+  color: color-mix(in srgb, var(--doc-muted) 86%, var(--doc-bg));
+  font-size: 0.94em;
 }
 
 .md-section {
