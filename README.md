@@ -1,5 +1,7 @@
 # langgraph-artifact-memory
 
+[한국어 문서](README.kr.md)
+
 Keep heavy values outside LangGraph checkpoints and store compact `ArtifactRef` values in state.
 
 The package externalizes configured state channels before the first checkpoint, hydrates only the
@@ -16,9 +18,53 @@ heavy value -> ArtifactStore -> ArtifactRef in graph state
 ArtifactRef -> bounded hydrate -> real value inside one node
 ```
 
-In a local benchmark with 10 concurrent threads and 1,000 total turns, compact references reduced
-the maximum checkpoint from 2.35 MB to 112 KB and total runtime from 164.2 seconds to 49.2 seconds.
-Results depend on workload, backend, durability mode, and infrastructure.
+## Measured impact
+
+The following end-to-end benchmark used the same Redis service, `durability="sync"`, 10 concurrent
+users, and 100 turns per user. Each turn added five 4 KB artifacts and one 1 KB user message. The
+answer node hydrated five artifacts, calculated a digest, and produced a 1 KB AI message.
+
+| Metric | Inline state | `ArtifactRef` + bounded messages | Improvement |
+|---|---:|---:|---:|
+| Total runtime for 1,000 turns | 164.2 s | 49.2 s | 70.1% lower |
+| Throughput | 6.09 turns/s | 20.33 turns/s | 3.34x |
+| Average turn latency | 1,634 ms | 490 ms | 70.0% lower |
+| p95 turn latency | 3,211 ms | 722 ms | 77.5% lower |
+| Last 10 turns per user, average | 3,205 ms | 698 ms | 78.2% lower |
+| Maximum checkpoint size | 2,346 KB | 112 KB | 95.2% lower |
+| Artifact channel size | 2,104 KB | 85 KB | 96.0% lower |
+| Message channel size | 242 KB | 25 KB | 89.5% lower |
+| Checkpoint `aget_tuple` average | 926 ms | 89 ms | 90.4% lower |
+| Checkpoint `aput` average | 118 ms | 40 ms | 65.7% lower |
+| Redis peak memory | 507 MB | 382 MB | 24.6% lower |
+| Redis workload memory increase | 404 MB | 279 MB | 30.9% lower |
+
+These are local benchmark results, not production guarantees. The optimized Redis peak includes
+5,000 stored artifact bodies and 1,800 archived messages; it does not hide external-storage cost.
+The comparison measures the complete recommended configuration—artifact externalization plus a
+bounded message window—rather than attributing every improvement to artifact externalization alone.
+Results depend on payload size, graph shape, checkpointer, durability mode, network latency, Redis
+configuration, and hydration policy.
+
+### Where it helps
+
+| Workload characteristic | Inline state behavior | With this package |
+|---|---|---|
+| Documents or Tool results accumulate in lists | Every checkpoint repeatedly serializes growing payloads | Checkpoints retain small references; bodies are written once |
+| A conversation runs for many turns | Message state and checkpoint reads grow continuously | Recent messages stay in state; evicted messages remain retrievable from the archive |
+| Several workers or pods share a thread | Large checkpoint reads/writes amplify Redis and network load | Redis-backed references are shared while per-node hydration remains bounded |
+| Only one node needs a heavy value | Every node receives the heavy checkpoint state | `hydrate` restores only the configured slice for the wrapped node |
+| Reducers repeatedly merge large lists | Copying, merging, and serialization cost grows with full payload size | Reducers merge compact `ArtifactRef` dictionaries instead of the original bodies |
+
+### When it may not help
+
+| Situation | Trade-off |
+|---|---|
+| Short conversations with small state | Artifact put/get calls can cost more than the checkpoint savings |
+| Every node needs every artifact | Repeated full hydration can move the bottleneck from checkpoints to the artifact store |
+| Hundreds of MB are hydrated at once | Pod memory can still grow; use `last_n`, `max_bytes`, or application-level retrieval |
+| Artifact and checkpoint retention are not coordinated | Checkpoints may reference deleted data, or unused artifacts may accumulate |
+| An in-memory or local store is used across multiple pods | References are not shareable; use Redis or another shared backend |
 
 ## Installation
 
