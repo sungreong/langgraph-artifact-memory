@@ -365,7 +365,7 @@ artifact로 저장한 뒤 메시지에는 참조나 짧은 요약만 남기는 �
 것이다.
 
 ```python
-externalize={
+externalize = {
     "artfacts": Externalize(itemized=True),  # 오타
 }
 ```
